@@ -1,9 +1,10 @@
-from app.core.database import Base, engine
+from app.core.database import Base, engine, create_views
 from app.models.country import Country
 from app.models.defense_spending import DefenseSpending
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    create_views()
     print("Tables created.")
 
 if __name__ == "__main__":
