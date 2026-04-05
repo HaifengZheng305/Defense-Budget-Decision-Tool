@@ -1,4 +1,4 @@
-CREATE VIEW defense_spending_analysis AS
+CREATE OR REPLACE VIEW defense_spending_analysis AS
 SELECT
     c.id AS country_id,
     c.name AS country,
@@ -27,8 +27,10 @@ SELECT
         ), 0)
     ) * 100 AS growth_5yr_percent,
     ROUND(
-        d.spending_usd * 100.0 /
-        SUM(d.spending_usd) OVER (PARTITION BY d.year),
+        (
+            d.spending_usd * 100.0 /
+            SUM(d.spending_usd) OVER (PARTITION BY d.year)
+        )::numeric,
         2
     ) AS global_share_percent,
     RANK() OVER (

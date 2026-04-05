@@ -1,11 +1,15 @@
 import pandas as pd
+import os
 from sqlalchemy.orm import Session
 
+from pathlib import Path
 from app.core.database import SessionLocal
 from app.models.country import Country
 from app.models.defense_spending import DefenseSpending
 
-EXCEL_PATH = "data/SIPRI-Milex-data-1949-2024_2.xlsx"
+BASE_DIR = Path(__file__).resolve().parents[2]  # goes from utils → app
+EXCEL_PATH = BASE_DIR / "data" / "SIPRI-Milex-data-1949-2024_2.xlsx"
+
 SHEET_NAME = "Current US$"
 SOURCE_NAME = "SIPRI"
 
@@ -199,7 +203,3 @@ def ingest():
 
     finally:
         session.close()
-
-
-if __name__ == "__main__":
-    ingest()
