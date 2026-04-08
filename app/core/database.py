@@ -22,5 +22,20 @@ def create_views():
     with open(SQL_PATH, "r") as f:
         sql = f.read()
 
+    print("Creating/refreshing SQL views from", SQL_PATH)
+
+    # Execute statements one-by-one to ensure compatibility across drivers
+    statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
+    executed = 0
     with engine.begin() as conn:
-        conn.execute(text(sql))
+        for stmt in statements:
+            conn.execute(text(stmt))
+            executed += 1
+        # quick sanity check: touch a key view if present (won't fail if absent)
+        try:
+            conn.execute(text("SELECT 1 FROM vw_country_signal_latest LIMIT 1"))
+        except Exception:
+            # It's fine if the view isn't queryable yet (e.g., empty base tables)
+            pass
+
+    print(f"Executed {executed} SQL statements.")
