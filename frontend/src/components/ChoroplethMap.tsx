@@ -58,7 +58,6 @@ export default function ChoroplethMap() {
       .replace(/\s+/g, " ")
       .trim();
 
-    // Common map-name -> dataset-name aliases (extend as needed)
     const aliases: Record<string, string> = {
       "united states of america": "united states",
       "russian federation": "russia",
@@ -66,35 +65,17 @@ export default function ChoroplethMap() {
       "viet nam": "vietnam",
       "bolivia (plurinational state of)": "bolivia",
       "venezuela (bolivarian republic of)": "venezuela",
-      "tanzania, united republic of": "tanzania",
+      "tanzania united republic of": "tanzania",
       "democratic republic of the congo": "congo, dem rep",
       "republic of the congo": "congo",
       "syrian arab republic": "syria",
-      "lao people's democratic republic": "laos",
-      "korea, republic of": "south korea",
-      "korea, democratic people's republic of": "north korea"
+      "lao peoples democratic republic": "laos",
+      "korea republic of": "south korea",
+      "korea democratic peoples republic of": "north korea"
     };
 
     return aliases[base] ?? base;
   }
-
-  // NOTE: world-atlas topojson doesn't include ISO3; we join by normalized country name for now.
-  const nameToItem = useMemo(() => {
-    const m = new Map<string, MapMetricItem>();
-    data?.items.forEach((it) => {
-      m.set(normalizeName(it.country_name), it);
-    });
-    return m;
-  }, [data]);
-
-  const values = useMemo(() => (data?.items.map((i) => i.value ?? 0).filter((v) => v != null) as number[]) || [], [data]);
-  const [min, max] = useMemo(() => {
-    if (!values.length) return [0, 0];
-    const vmin = Math.min(...values);
-    const vmax = Math.max(...values);
-    return [vmin, vmax];
-  }, [values]);
-  const colorScale = useMemo(() => scaleSequential(interpolateBlues).domain([min, max]), [min, max]);
 
   function pickIso3(props: any): string | undefined {
     const candidates = [
@@ -104,8 +85,53 @@ export default function ChoroplethMap() {
       props?.adm0_a3,
       props?.SOV_A3
     ].filter(Boolean) as string[];
+
     const iso = candidates.find((c) => c && c !== "-99");
     return iso;
+  }
+
+  const { isoToItem, nameToItem } = useMemo(() => {
+    const isoMap = new Map<string, MapMetricItem>();
+    const nameMap = new Map<string, MapMetricItem>();
+
+    data?.items.forEach((it) => {
+      if (it.iso3) {
+        isoMap.set(it.iso3.toUpperCase(), it);
+      }
+      nameMap.set(normalizeName(it.country_name), it);
+    });
+
+    return { isoToItem: isoMap, nameToItem: nameMap };
+  }, [data]);
+
+  const values = useMemo(
+    () => (data?.items.map((i) => i.value ?? 0).filter((v) => v != null) as number[]) || [],
+    [data]
+  );
+
+  const [min, max] = useMemo(() => {
+    if (!values.length) return [0, 0];
+    const vmin = Math.min(...values);
+    const vmax = Math.max(...values);
+    return [vmin, vmax];
+  }, [values]);
+
+  const colorScale = useMemo(() => scaleSequential(interpolateBlues).domain([min, max]), [min, max]);
+
+  function resolveCountryMatch(geo: any): MapMetricItem | undefined {
+    const props = geo?.properties ?? {};
+    const geoName = (props.name ?? props.NAME) as string | undefined;
+    const iso = pickIso3(props)?.toUpperCase();
+
+    if (iso && isoToItem.has(iso)) {
+      return isoToItem.get(iso);
+    }
+
+    if (geoName) {
+      return nameToItem.get(normalizeName(geoName));
+    }
+
+    return undefined;
   }
 
   function toContainerCoords(evt: React.MouseEvent): { x: number; y: number } {
@@ -114,37 +140,41 @@ export default function ChoroplethMap() {
     return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
   }
 
-  function handleHover(evt: React.MouseEvent, geoNameRaw: string | undefined) {
-    const geoName = geoNameRaw ?? "(unknown)";
+  function handleHover(evt: React.MouseEvent, geo: any) {
+    const geoName = (geo?.properties?.name ?? geo?.properties?.NAME ?? "(unknown)") as string;
+
     if (normalizeName(geoName) === "antarctica") {
-      // Not in SIPRI-style country datasets; avoid noisy no-match tooltip
       setDebugLast("Antarctica ignored");
       setHover(null);
       return;
     }
-    const item = nameToItem.get(normalizeName(geoName));
-    setDebugLast(`${geoName} ${item ? "matched" : "no-match"}`);
+
+    const item = resolveCountryMatch(geo);
+    const iso = pickIso3(geo?.properties);
+
+    setDebugLast(`${geoName} | iso=${iso ?? "none"} | ${item ? "matched" : "no-match"}`);
+
+    const p = toContainerCoords(evt);
+
     if (!item) {
-      const p = toContainerCoords(evt);
       setHover({
         x: p.x,
         y: p.y,
         countryId: -1,
-        iso3: null,
+        iso3: iso ?? null,
         name: geoName,
         value: undefined
       });
       return;
     }
 
-    // Show tooltip immediately; signals come from preloaded cache
-    const p = toContainerCoords(evt);
     const cached = cacheRef.current.get(item.country_id);
+
     setHover({
       x: p.x,
       y: p.y,
       countryId: item.country_id,
-      iso3: item.iso3 ?? null,
+      iso3: item.iso3 ?? iso ?? null,
       name: item.country_name,
       value: item.value,
       signals: cached?.signals,
@@ -172,26 +202,27 @@ export default function ChoroplethMap() {
             <option value="rank_change_5y">Rank change (5Y)</option>
           </select>
         </label>
+
         <div className="legend">
           <span>Low</span>
           <div className="gradient" />
           <span>High</span>
         </div>
       </div>
+
       <ComposableMap projectionConfig={{ scale: 145 }}>
         <Geographies geography={GEO_URL}>
           {({ geographies }: { geographies: any[] }) =>
             geographies.map((geo: any) => {
-              const geoName = (geo.properties?.name ?? geo.properties?.NAME) as string | undefined;
-              const item = geoName ? nameToItem.get(normalizeName(geoName)) : undefined;
-              const fill =
-                item && typeof item.value === "number" ? colorScale(item.value) : "#EEE";
+              const item = resolveCountryMatch(geo);
+              const fill = item && typeof item.value === "number" ? colorScale(item.value) : "#EEE";
+
               return (
                 <Geography
                   key={geo.rsmKey}
                   geography={geo}
-                  onMouseEnter={(evt: any) => handleHover(evt, geoName)}
-                  onMouseMove={(evt: any) => handleHover(evt, geoName)}
+                  onMouseEnter={(evt: any) => handleHover(evt, geo)}
+                  onMouseMove={(evt: any) => handleHover(evt, geo)}
                   onMouseLeave={handleLeave}
                   style={{
                     default: { fill, outline: "none" },
@@ -204,62 +235,107 @@ export default function ChoroplethMap() {
           }
         </Geographies>
       </ComposableMap>
+
       <div className="debug-bar">data: {allLoaded ? "loaded" : "loading…"} | hover: {debugLast}</div>
+
       {hover && (
         <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}>
           <div className="tt-title">{hover.name}</div>
+
           {typeof hover.value === "number" && (
             <div className="tt-row">
               <span className="k">Map metric</span>
-              <span className="v">{hover.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              <span className="v">
+                {hover.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </span>
             </div>
           )}
+
+          {hover.iso3 && (
+            <div className="tt-row">
+              <span className="k">ISO3</span>
+              <span className="v">{hover.iso3}</span>
+            </div>
+          )}
+
           {hover.signals && (
             <>
               <div className="tt-row">
                 <span className="k">Year</span>
                 <span className="v">{hover.signals.year}</span>
               </div>
+
               <div className="tt-row">
                 <span className="k">Spending (USD, millions)</span>
                 <span className="v">
                   {typeof hover.signals.spending_usd === "number"
-                    ? hover.signals.spending_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })
+                    ? hover.signals.spending_usd.toLocaleString(undefined, {
+                        maximumFractionDigits: 0
+                      })
                     : ""}
                 </span>
               </div>
+
               <div className="tt-row">
                 <span className="k">YoY %</span>
-                <span className="v">{hover.signals.yoy_latest_pct?.toFixed(1)}</span>
+                <span className="v">
+                  {typeof hover.signals.yoy_latest_pct === "number"
+                    ? hover.signals.yoy_latest_pct.toFixed(1)
+                    : ""}
+                </span>
               </div>
+
               <div className="tt-row">
                 <span className="k">5Y CAGR %</span>
-                <span className="v">{hover.signals.cagr_5y_pct?.toFixed(1)}</span>
+                <span className="v">
+                  {typeof hover.signals.cagr_5y_pct === "number"
+                    ? hover.signals.cagr_5y_pct.toFixed(1)
+                    : ""}
+                </span>
               </div>
+
               <div className="tt-row">
                 <span className="k">% GDP</span>
-                <span className="v">{hover.signals.gdp_percent?.toFixed(1)}</span>
+                <span className="v">
+                  {typeof hover.signals.gdp_percent === "number"
+                    ? hover.signals.gdp_percent.toFixed(1)
+                    : ""}
+                </span>
               </div>
+
               <div className="tt-row">
                 <span className="k">Share global %</span>
-                <span className="v">{hover.signals.share_global_pct?.toFixed(2)}</span>
+                <span className="v">
+                  {typeof hover.signals.share_global_pct === "number"
+                    ? hover.signals.share_global_pct.toFixed(2)
+                    : ""}
+                </span>
               </div>
+
               <div className="tt-row">
                 <span className="k">Rank</span>
                 <span className="v">
-                  {hover.signals.rank} ({hover.signals.rank_change_5y && (hover.signals.rank_change_5y > 0 ? "+" : "")}
-                  {hover.signals.rank_change_5y})
+                  {hover.signals.rank}
+                  {" ("}
+                  {hover.signals.rank_change_5y != null
+                    ? `${hover.signals.rank_change_5y > 0 ? "+" : ""}${hover.signals.rank_change_5y}`
+                    : ""}
+                  {")"}
                 </span>
               </div>
+
               {!!hover.flags?.length && (
                 <div className="tt-flags">
-                  {hover.flags?.map((f) => (
-                    <span className="flag" key={f}>{f.replace(/_/g, " ")}</span>
+                  {hover.flags.map((f) => (
+                    <span className="flag" key={f}>
+                      {f.replace(/_/g, " ")}
+                    </span>
                   ))}
                 </div>
               )}
             </>
           )}
+
           {!hover.signals && <div className="muted">Loading signals…</div>}
         </div>
       )}
